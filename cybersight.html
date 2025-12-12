@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>CyberSight: A/V Scanner</title>
+    <title>CyberSight v1.1: Transparent AR</title>
     
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
@@ -11,29 +11,33 @@
     <style>
         body { margin: 0; background: #000; overflow: hidden; font-family: 'Courier New', monospace; }
         
-        /* 1. Camera Feed */
+        /* 1. Camera Feed - Fills screen */
         video {
             position: absolute; top: 0; left: 0;
-            width: 100vw; height: 100vh;
-            object-fit: cover;
+            width: 100%; height: 100%;
+            object-fit: cover; /* Ensures full coverage without stretching */
             z-index: 1;
         }
 
         /* 2. HUD Layer (Boxes & Text) */
         #hud-canvas {
             position: absolute; top: 0; left: 0;
-            width: 100vw; height: 100vh;
+            width: 100%; height: 100%;
             z-index: 2;
+            pointer-events: none; /* Let touches pass through */
         }
 
-        /* 3. Spectrogram Panel (Bottom) */
+        /* 3. Spectrogram Panel (Bottom Overlay) */
         #spectro-panel {
             position: absolute; bottom: 0; left: 0;
-            width: 100%; height: 25vh;
-            background: rgba(0, 10, 0, 0.6);
-            border-top: 2px solid #00ff00;
+            width: 100%; height: 30vh; /* Slightly taller for legends */
+            /* Background removed for transparency */
+            background: transparent; 
+            /* Subtle top border for separation */
+            border-top: 1px solid rgba(0, 255, 0, 0.3);
             z-index: 3;
             display: flex;
+            pointer-events: none;
         }
         #spectro-canvas { width: 100%; height: 100%; }
 
@@ -61,9 +65,9 @@
 <body>
 
     <div id="overlay">
-        <h1>CYBER SIGHT</h1>
-        <p>Object Detection + Stereo Sound Triangulation</p>
-        <p style="color:yellow; font-size:12px;">⚠ USE LANDSCAPE MODE FOR STEREO</p>
+        <h1>CYBER SIGHT v1.1</h1>
+        <p>Transparent Overlay + Stereo Tracking</p>
+        <p style="color:yellow; font-size:12px;">⚠ USE LANDSCAPE MODE FOR STEREO DETECTION</p>
         <div id="loading-msg">Initializing Neural Net...</div>
         <button id="start-btn">ENGAGE SENSORS</button>
         <div id="status-log"></div>
@@ -116,8 +120,7 @@
             window.addEventListener('resize', resize);
 
             try {
-                // A. Request Camera & Microphone
-                // Note: We ask for 2 channels to enable stereo if hardware supports it
+                // A. Request Camera & Microphone (Stereo preference)
                 const stream = await navigator.mediaDevices.getUserMedia({ 
                     video: { facingMode: 'environment' }, 
                     audio: { 
@@ -145,6 +148,7 @@
         }
 
         function resize() {
+            // Ensure canvases match window size exactly
             hudCanvas.width = window.innerWidth;
             hudCanvas.height = window.innerHeight;
             spectroCanvas.width = document.getElementById('spectro-panel').offsetWidth;
@@ -174,7 +178,7 @@
 
             // Main Channel (Combined for Spectrogram)
             mainAnalyser = audioCtx.createAnalyser();
-            mainAnalyser.fftSize = 512;
+            mainAnalyser.fftSize = 512; // Higher resolution for visualizer
             source.connect(mainAnalyser);
             mainData = new Uint8Array(mainAnalyser.frequencyBinCount);
         }
@@ -191,41 +195,38 @@
             const volR = getVol(rightAnalyser, rightData);
             const totalVol = (volL + volR) / 2;
             
-            // Calculate dB (Rough approximation)
-            // 0-255 mapped to -100dB to 0dB
+            // Calculate dB (Rough approximation for display)
             const db = (totalVol > 0) ? (20 * Math.log10(totalVol / 255)) * 2 : -100;
-            const dbDisplay = Math.max(-100, db + 60); // Offset for display comfort
+            const dbDisplay = Math.max(-100, db + 60);
 
             // C. Determine Direction
             let direction = "CENTER";
-            // Threshold: One side must be 20% louder to count as directional
-            if (volL > volR * 1.2 && volL > 10) direction = "LEFT";
-            else if (volR > volL * 1.2 && volR > 10) direction = "RIGHT";
+            // Threshold: One side must be ~20% louder
+            if (volL > volR * 1.2 && volL > 5) direction = "LEFT";
+            else if (volR > volL * 1.2 && volR > 5) direction = "RIGHT";
 
             // D. Draw HUD
             hudCtx.clearRect(0, 0, hudCanvas.width, hudCanvas.height);
             
             // Draw Directional Arrows (The "Seeker")
-            if (totalVol > 15) { // Only if sound exists
-                hudCtx.font = "bold 40px Courier New";
+            if (totalVol > 10) {
+                hudCtx.font = "bold 30px Courier New";
                 hudCtx.fillStyle = "rgba(0, 255, 0, 0.7)";
+                const cy = window.innerHeight / 2;
                 
                 if (direction === "LEFT") {
-                    hudCtx.fillText("<< DETECTING SIGNAL", 20, window.innerHeight / 2);
+                    hudCtx.fillText("<< SIGNAL LEFT", 20, cy);
                 } else if (direction === "RIGHT") {
-                    const txt = "DETECTING SIGNAL >>";
-                    hudCtx.fillText(txt, window.innerWidth - hudCtx.measureText(txt).width - 20, window.innerHeight / 2);
+                    const txt = "SIGNAL RIGHT >>";
+                    hudCtx.fillText(txt, window.innerWidth - hudCtx.measureText(txt).width - 20, cy);
                 } else {
                     // CENTERED: Draw Crosshair
                     const cx = window.innerWidth / 2;
-                    const cy = window.innerHeight / 2;
                     hudCtx.strokeStyle = "rgba(0, 255, 0, 0.5)";
                     hudCtx.lineWidth = 2;
                     hudCtx.beginPath();
-                    // Cross
                     hudCtx.moveTo(cx - 30, cy); hudCtx.lineTo(cx + 30, cy);
                     hudCtx.moveTo(cx, cy - 30); hudCtx.lineTo(cx, cy + 30);
-                    // Circle
                     hudCtx.arc(cx, cy, 50, 0, 2*Math.PI);
                     hudCtx.stroke();
                 }
@@ -236,17 +237,13 @@
                 const [x, y, width, height] = prediction.bbox;
                 const label = prediction.class.toUpperCase();
                 
-                // Centering Check
                 const boxCenterX = x + (width / 2);
                 const screenCenterX = window.innerWidth / 2;
                 
-                // STIMULUS LOGIC:
-                // 1. Is it Loud?
-                // 2. Is Audio Center?
-                // 3. Is Visual Center?
-                const isLoud = dbDisplay > -20; // Adjusted threshold
+                // STIMULUS LOGIC: Loud + Centered Audio + Centered Visual
+                const isLoud = dbDisplay > -25; 
                 const isAudioCentered = direction === "CENTER";
-                const isVisualCentered = Math.abs(boxCenterX - screenCenterX) < 200;
+                const isVisualCentered = Math.abs(boxCenterX - screenCenterX) < 250;
 
                 let color = '#00ff00';
                 let text = label;
@@ -255,13 +252,12 @@
                 if (isLoud && isAudioCentered && isVisualCentered) {
                     // TARGET LOCK
                     color = '#ff0000';
-                    text = `SOURCE: ${label} [${dbDisplay.toFixed(0)} dB]`;
-                    lineWidth = 5;
+                    text = `SOURCE: ${label} [${dbDisplay.toFixed(0)}dB]`;
+                    lineWidth = 4;
                     
                     // Jitter effect
-                    const rx = (Math.random() - 0.5) * 10;
-                    const ry = (Math.random() - 0.5) * 10;
-                    
+                    const rx = (Math.random() - 0.5) * 8;
+                    const ry = (Math.random() - 0.5) * 8;
                     hudCtx.strokeRect(x + rx, y + ry, width, height);
                 } else {
                     // PASSIVE SCAN
@@ -271,21 +267,19 @@
                 hudCtx.lineWidth = lineWidth;
                 hudCtx.strokeStyle = color;
                 
-                // Draw Label Background
+                // Draw Label
                 hudCtx.fillStyle = color;
                 const textWidth = hudCtx.measureText(text).width;
-                hudCtx.fillRect(x, y - 25, textWidth + 10, 25);
-                
-                // Draw Label Text
+                hudCtx.fillRect(x, y - 20, textWidth + 6, 20);
                 hudCtx.fillStyle = '#000';
-                hudCtx.font = "bold 16px Courier New";
-                hudCtx.fillText(text, x + 5, y - 7);
+                hudCtx.font = "bold 14px Courier New";
+                hudCtx.fillText(text, x + 3, y - 5);
             });
 
             requestAnimationFrame(detectFrame);
         }
 
-        // --- 4. SPECTROGRAM (Visualizer) ---
+        // --- 4. SPECTROGRAM (Transparent Visualizer) ---
         function drawSpectrogram() {
             if (!isRunning) return;
             requestAnimationFrame(drawSpectrogram);
@@ -296,11 +290,20 @@
             const h = spectroCanvas.height;
             const barWidth = w / mainData.length;
 
-            // Fade out previous frame
-            spectroCtx.fillStyle = 'rgba(0, 10, 0, 0.2)';
-            spectroCtx.fillRect(0, 0, w, h);
+            // 1. CLEAR CANVAS (Crucial for transparency)
+            spectroCtx.clearRect(0, 0, w, h);
 
-            // Draw Bars
+            // 2. DRAW LEGENDS
+            spectroCtx.fillStyle = "rgba(0, 255, 0, 0.8)";
+            spectroCtx.font = "12px Courier New";
+            spectroCtx.textAlign = "left";
+            spectroCtx.fillText("LOW FREQ (BASS)", 10, h - 10);
+            spectroCtx.textAlign = "right";
+            spectroCtx.fillText("HIGH FREQ (TREBLE)", w - 10, h - 10);
+            spectroCtx.textAlign = "left";
+            spectroCtx.fillText("MAX (0dB)", 10, 20);
+
+            // 3. DRAW BARS
             for (let i = 0; i < mainData.length; i++) {
                 const val = mainData[i];
                 const percent = val / 255;
@@ -308,14 +311,15 @@
 
                 // Color Map: Green -> Yellow -> Red
                 const hue = 120 - (percent * 120);
-                spectroCtx.fillStyle = `hsl(${hue}, 100%, 50%)`;
+                // Use HSLA for slight transparency on the bars themselves
+                spectroCtx.fillStyle = `hsla(${hue}, 100%, 50%, 0.8)`;
                 spectroCtx.fillRect(i * barWidth, h - barH, barWidth, barH);
             }
             
-            // Draw Waveform Overlay
+            // 4. DRAW WAVEFORM OVERLAY
             spectroCtx.beginPath();
-            spectroCtx.strokeStyle = "rgba(255, 255, 255, 0.5)";
-            spectroCtx.lineWidth = 1;
+            spectroCtx.strokeStyle = "rgba(255, 255, 255, 0.7)";
+            spectroCtx.lineWidth = 1.5;
             spectroCtx.moveTo(0, h);
             for (let i = 0; i < mainData.length; i++) {
                 const percent = mainData[i] / 255;
@@ -324,7 +328,7 @@
             spectroCtx.stroke();
         }
 
-        // Utility: Get Average Volume from Analyzer Node
+        // Utility: Get Average Volume
         function getVol(analyser, array) {
             if(!analyser) return 0;
             analyser.getByteFrequencyData(array);
