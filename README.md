@@ -1,2 +1,0 @@
-# arscanner
-Scan your surroundings 
