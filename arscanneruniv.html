@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Scanner V3 (No Flags)</title>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.153.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.153.0/examples/jsm/"
+            }
+        }
+    </script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Courier New', monospace; color: #00ff00; }
+        
+        /* HUD UI */
+        #hud {
+            position: absolute; top: 10px; left: 10px; z-index: 10; pointer-events: none;
+            background: rgba(0, 20, 0, 0.7); padding: 15px; border: 1px solid #00ff00;
+        }
+        
+        /* Control Buttons */
+        #controls {
+            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+            z-index: 20; display: none; gap: 15px;
+        }
+        
+        button {
+            background: #000; border: 1px solid #00ff00; color: #00ff00;
+            padding: 15px 25px; font-weight: bold; font-family: inherit; font-size: 14px;
+        }
+        button.active { background: #00ff00; color: #000; }
+
+        /* Start Screen */
+        #overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: #000; z-index: 50;
+            display: flex; flex-direction: column; justify-content: center; align-items: center; 
+            text-align: center; color: white;
+        }
+        h1 { color: #00ff00; text-shadow: 0 0 10px #00ff00; }
+    </style>
+</head>
+<body>
+
+    <div id="overlay">
+        <h1>SCANNER V3</h1>
+        <p>NO FLAGS REQUIRED</p>
+        <p style="color: #888; font-size: 12px;">Sensors: Mic • Accelerometer • Compass</p>
+        <br>
+        <button id="btn-start">ACTIVATE SYSTEM</button>
+    </div>
+
+    <div id="hud">
+        MODE: <span id="mode-display" style="font-weight:bold;">STANDBY</span><br>
+        DATA: <span id="val-display">--</span>
+    </div>
+
+    <div id="controls">
+        <button onclick="setMode('SEISMIC')" id="btn-seismic" class="active">VIBRATION</button>
+        <button onclick="setMode('AUDIO')" id="btn-audio">SOUND</button>
+        <button onclick="setMode('COMPASS')" id="btn-compass">COMPASS</button>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { ARButton } from 'three/addons/webxr/ARButton.js';
+
+        // Global Variables
+        let camera, scene, renderer;
+        let mode = 'SEISMIC'; 
+        let lastPaint = 0;
+
+        // Sensor Variables
+        let audioCtx, analyser, dataArray;
+        let motionVal = 0;      // From Accelerometer
+        let compassHeading = 0; // From DeviceOrientation
+
+        // --- 1. ACTIVATION ---
+        document.getElementById('btn-start').addEventListener('click', async () => {
+            // Hide Menu
+            document.getElementById('overlay').style.display = 'none';
+            document.getElementById('controls').style.display = 'flex';
+
+            // A. Start Audio (Mic)
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const source = audioCtx.createMediaStreamSource(stream);
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 256;
+                source.connect(analyser);
+                dataArray = new Uint8Array(analyser.frequencyBinCount);
+            } catch (e) { console.warn("Mic denied or error", e); }
+
+            // B. Start Accelerometer (Seismic)
+            if (window.DeviceMotionEvent) {
+                window.addEventListener('devicemotion', (event) => {
+                    const a = event.acceleration; // Acceleration without gravity
+                    if (a && a.x !== null) {
+                        // Magnitude formula: sqrt(x^2 + y^2 + z^2)
+                        motionVal = Math.sqrt(a.x**2 + a.y**2 + a.z**2);
+                    }
+                });
+            }
+
+            // C. Start Compass (Orientation)
+            if (window.DeviceOrientationEvent) {
+                window.addEventListener('deviceorientation', (event) => {
+                    // Android uses 'alpha' for compass (0-360)
+                    if (event.webkitCompassHeading) {
+                        compassHeading = event.webkitCompassHeading; // iOS
+                    } else if (event.alpha) {
+                        compassHeading = 360 - event.alpha; // Android
+                    }
+                });
+            }
+
+            // D. Start AR Scene
+            initAR();
+        });
+
+        // --- 2. 3D SCENE SETUP ---
+        function initAR() {
+            const container = document.createElement('div');
+            document.body.appendChild(container);
+
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.xr.enabled = true;
+            container.appendChild(renderer.domElement);
+
+            // Lighting
+            scene.add(new THREE.HemisphereLight(0xffffff, 0x444444));
+
+            // AR Button
+            document.body.appendChild(ARButton.createButton(renderer));
+
+            // Resize Handler
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+
+            // Start Loop
+            renderer.setAnimationLoop(render);
+        }
+
+        // --- 3. THE LOOP (Runs 60 times a second) ---
+        function render(timestamp, frame) {
+            let color = new THREE.Color(0x00ff00);
+            let paint = false;
+            let displayString = "--";
+
+            // === MODE 1: SEISMIC (Vibration) ===
+            if (mode === 'SEISMIC') {
+                displayString = motionVal.toFixed(2) + " m/s²";
+                
+                // Only paint if moving significantly
+                if (motionVal > 0.3) {
+                    paint = true;
+                    // Green -> Red based on intensity
+                    let t = Math.min(1, motionVal / 4);
+                    color.setHSL(0.33 * (1 - t), 1, 0.5); 
+                }
+            }
+
+            // === MODE 2: SOUND (Audio) ===
+            else if (mode === 'AUDIO') {
+                if (analyser) {
+                    analyser.getByteFrequencyData(dataArray);
+                    // Calculate average volume
+                    let sum = 0;
+                    for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+                    let volume = sum / dataArray.length;
+
+                    displayString = volume.toFixed(0) + " Vol";
+                    
+                    if (volume > 15) {
+                        paint = true;
+                        // Blue -> Purple
+                        color.setHSL(0.6 + (volume / 255) * 0.2, 1, 0.5);
+                    }
+                }
+            }
+
+            // === MODE 3: COMPASS (Direction) ===
+            else if (mode === 'COMPASS') {
+                displayString = compassHeading.toFixed(0) + "°";
+                
+                // Paint RED if facing North (350-10 degrees)
+                // Paint BLUE if facing South (170-190 degrees)
+                if (compassHeading > 350 || compassHeading < 10) {
+                    paint = true;
+                    color.setHex(0xff0000); // North
+                } else if (compassHeading > 170 && compassHeading < 190) {
+                    paint = true;
+                    color.setHex(0x0000ff); // South
+                }
+            }
+
+            // Update Text
+            document.getElementById('mode-display').innerText = mode;
+            document.getElementById('val-display').innerText = displayString;
+
+            // Paint AR Dot (Throttled to every 100ms)
+            if (frame && paint && (timestamp - lastPaint > 100)) {
+                createDot(color);
+                lastPaint = timestamp;
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        function createDot(color) {
+            const geometry = new THREE.SphereGeometry(0.03, 8, 8); // 3cm dot
+            const material = new THREE.MeshBasicMaterial({ color: color });
+            const sphere = new THREE.Mesh(geometry, material);
+
+            // Place dot 30cm in front of phone
+            const p = camera.position;
+            const d = camera.getWorldDirection(new THREE.Vector3());
+            sphere.position.set(
+                p.x + d.x * 0.3,
+                p.y + d.y * 0.3,
+                p.z + d.z * 0.3
+            );
+            
+            scene.add(sphere);
+        }
+
+        // Mode Switcher Helper
+        window.setMode = function(m) {
+            mode = m;
+            document.querySelectorAll('#controls button').forEach(b => b.classList.remove('active'));
+            document.getElementById('btn-' + m.toLowerCase()).classList.add('active');
+        }
+    </script>
+</body>
+</html>
