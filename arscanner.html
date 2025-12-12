@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Pixel 10 Pro XL - AR Sensor Fusion</title>
+    <title>Pixel AR Scanner v2</title>
     <script type="importmap">
         {
             "imports": {
@@ -13,86 +13,49 @@
         }
     </script>
     <style>
-        body {
-            margin: 0;
-            overflow: hidden;
-            background-color: #000;
-            font-family: 'Courier New', Courier, monospace;
-            color: #0f0;
-        }
-
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Courier New', Courier, monospace; color: #0f0; }
+        
         /* HUD Overlay */
         #hud {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            z-index: 10;
-            pointer-events: none;
-            background: rgba(0, 0, 0, 0.5);
-            padding: 10px;
-            border: 1px solid #0f0;
-        }
-
-        /* Sensor Mode Switcher */
-        #controls {
-            position: absolute;
-            bottom: 30px;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 20;
-            display: none; /* Hidden until started */
-            gap: 10px;
-        }
-
-        button {
-            background: rgba(0, 20, 0, 0.9);
-            border: 1px solid #0f0;
-            color: #0f0;
-            padding: 12px 20px;
-            font-family: inherit;
-            font-weight: bold;
-            text-transform: uppercase;
-            cursor: pointer;
-        }
-
-        button.active {
-            background: #0f0;
-            color: #000;
-        }
-
-        /* Start Button */
-        #start-overlay {
-            position: absolute;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.8);
-            z-index: 50;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            text-align: center;
+            position: absolute; top: 10px; left: 10px; z-index: 10; pointer-events: none;
+            background: rgba(0, 0, 0, 0.5); padding: 10px; border: 1px solid #0f0;
         }
         
-        #error-log {
-            color: #ff5555;
-            font-size: 12px;
-            margin-top: 5px;
+        /* Mode Switcher */
+        #controls {
+            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+            z-index: 20; display: none; gap: 10px;
         }
+        button {
+            background: rgba(0, 20, 0, 0.9); border: 1px solid #0f0; color: #0f0;
+            padding: 12px 20px; font-weight: bold; cursor: pointer; text-transform: uppercase;
+        }
+        button.active { background: #0f0; color: #000; }
+
+        /* Fullscreen Overlay for Permissions */
+        #start-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(10, 10, 10, 0.95); z-index: 50;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            text-align: center; color: white; padding: 20px;
+        }
+        #status-msg { margin-bottom: 20px; color: #aaa; max-width: 400px; }
+        .error { color: #ff5555; }
+        .success { color: #55ff55; }
     </style>
 </head>
 <body>
 
     <div id="start-overlay">
-        <h1>SENSOR FUSION AR</h1>
-        <p>Requires Chrome (Android) + HTTPS<br>Flags: #enable-generic-sensor-extra-classes</p>
+        <h1>AR TRICORDER</h1>
+        <p id="status-msg">Tap Initialize to grant access to Camera, Mic, and Sensors.</p>
         <button id="btn-init">INITIALIZE SYSTEM</button>
     </div>
 
     <div id="hud">
-        <div>SYSTEM: <span id="sys-status">STANDBY</span></div>
         <div>MODE: <span id="mode-status">EMF</span></div>
-        <div>VALUE: <span id="val-status">--</span></div>
-        <div id="error-log"></div>
+        <div>DATA: <span id="val-status">--</span></div>
+        <div id="error-log" style="font-size:10px; margin-top:5px; color:#aaa;"></div>
     </div>
 
     <div id="controls">
@@ -105,254 +68,182 @@
         import * as THREE from 'three';
         import { ARButton } from 'three/addons/webxr/ARButton.js';
 
-        // --- GLOBAL VARIABLES ---
         let camera, scene, renderer;
-        let mode = 'EMF'; // EMF | AUDIO | LIGHT
+        let mode = 'EMF';
         let lastPaintTime = 0;
         
-        // Sensor Data Holders
-        let currentMag = 0;
-        let currentLux = 0;
-        
-        // Audio Objects
+        // Sensor Values
+        let currentMag = 0, currentLux = 0;
         let audioCtx, analyser, dataArray;
-        
-        // Sensor Objects
-        let magnetometer = null;
-        let lightSensor = null;
+        let magnetometer, lightSensor;
 
-        // --- INITIALIZATION ---
-        
+        // --- 1. SMART PERMISSION HANDLER ---
         document.getElementById('btn-init').addEventListener('click', async () => {
-            // 1. Hide Intro
-            document.getElementById('start-overlay').style.display = 'none';
-            document.getElementById('controls').style.display = 'flex';
+            const btn = document.getElementById('btn-init');
+            const msg = document.getElementById('status-msg');
             
-            // 2. Initialize Three.js Scene
-            initScene();
-            
-            // 3. Initialize Sensors
-            await initAudio();
-            initGenericSensors();
+            btn.disabled = true;
+            btn.innerText = "REQUESTING ACCESS...";
+
+            try {
+                // A. Request Camera & Mic (Triggers Standard Popup)
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+                
+                // Initialize Audio Context immediately after user gesture
+                setupAudio(stream);
+                
+                // B. Initialize 3D Engine
+                initScene();
+                
+                // C. Try Sensors (No flags assumed)
+                initSensors();
+
+                // D. Clear Overlay
+                document.getElementById('start-overlay').style.display = 'none';
+                document.getElementById('controls').style.display = 'flex';
+
+            } catch (err) {
+                // If Camera/Mic denied
+                btn.disabled = false;
+                btn.innerText = "RETRY";
+                msg.innerHTML = `<span class="error">ACCESS DENIED: ${err.message}</span><br>Please allow permissions in browser settings.`;
+            }
         });
 
+        // --- 2. SENSOR LOGIC WITH ERROR CATCHING ---
+        function initSensors() {
+            // Magnetometer
+            if ('Magnetometer' in window) {
+                try {
+                    magnetometer = new Magnetometer({ frequency: 60 });
+                    magnetometer.addEventListener('reading', () => {
+                        currentMag = Math.sqrt(magnetometer.x**2 + magnetometer.y**2 + magnetometer.z**2);
+                    });
+                    magnetometer.addEventListener('error', (event) => {
+                        // Smart Error Handling
+                        if (event.error.name === 'NotAllowedError') {
+                            log("Mag Blocked: Check Site Settings > Sensors");
+                        } else if (event.error.name === 'NotReadableError') {
+                            log("Mag Hardware Error");
+                        }
+                    });
+                    magnetometer.start();
+                    log("Magnetometer Ready");
+                } catch (err) {
+                    // This specific error means "Permissions Policy prevented this"
+                    if (err.name === 'SecurityError') {
+                         log("Mag Security Blocked. Check chrome://settings/content/sensors");
+                    } else {
+                         // Only if completely missing do we suggest flags
+                         log("Mag API missing. Enable #generic-sensor-extra-classes");
+                    }
+                }
+            } else {
+                log("Magnetometer not supported on this browser.");
+            }
+
+            // Light Sensor
+            if ('AmbientLightSensor' in window) {
+                try {
+                    lightSensor = new AmbientLightSensor({ frequency: 10 });
+                    lightSensor.addEventListener('reading', () => { currentLux = lightSensor.illuminance; });
+                    lightSensor.start();
+                } catch (e) { console.log("Light Sensor unavailable"); }
+            }
+        }
+
+        function setupAudio(stream) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const source = audioCtx.createMediaStreamSource(stream);
+            analyser = audioCtx.createAnalyser();
+            analyser.fftSize = 512;
+            source.connect(analyser);
+            dataArray = new Uint8Array(analyser.frequencyBinCount);
+        }
+
+        // --- 3. STANDARD AR SETUP ---
         function initScene() {
             const container = document.createElement('div');
             document.body.appendChild(container);
-
             scene = new THREE.Scene();
-
             camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
-
+            
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
             container.appendChild(renderer.domElement);
 
-            // Add lighting so spheres look 3D
-            const light = new THREE.HemisphereLight(0xffffff, 0x444444, 1);
-            scene.add(light);
-            const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
-            dirLight.position.set(0, 1, 0);
-            scene.add(dirLight);
-
-            // Add AR Button
+            scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1));
             document.body.appendChild(ARButton.createButton(renderer));
-
-            // Handle Resize
+            
             window.addEventListener('resize', () => {
                 camera.aspect = window.innerWidth / window.innerHeight;
                 camera.updateProjectionMatrix();
                 renderer.setSize(window.innerWidth, window.innerHeight);
             });
-
-            // Start Loop
             renderer.setAnimationLoop(render);
         }
 
-        // --- SENSOR SETUP ---
-
-        function initGenericSensors() {
-            // MAGNETOMETER
-            if ('Magnetometer' in window) {
-                try {
-                    magnetometer = new Magnetometer({ frequency: 60 });
-                    magnetometer.addEventListener('reading', () => {
-                        // Calculate total field strength in microTesla (uT)
-                        currentMag = Math.sqrt(magnetometer.x**2 + magnetometer.y**2 + magnetometer.z**2);
-                    });
-                    magnetometer.start();
-                    log("Magnetometer Active");
-                } catch (err) {
-                    log("Mag Error: " + err.message);
-                }
-            } else {
-                log("Magnetometer API missing (Check flags)");
-            }
-
-            // LIGHT SENSOR
-            if ('AmbientLightSensor' in window) {
-                try {
-                    lightSensor = new AmbientLightSensor({ frequency: 10 });
-                    lightSensor.addEventListener('reading', () => {
-                        currentLux = lightSensor.illuminance;
-                    });
-                    lightSensor.start();
-                    log("Light Sensor Active");
-                } catch (err) {
-                    log("Light Error: " + err.message);
-                }
-            }
-        }
-
-        async function initAudio() {
-            try {
-                // Create context (must be after user gesture)
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                
-                const stream = await navigator.mediaDevices.getUserMedia({ 
-                    audio: { 
-                        echoCancellation: false, 
-                        noiseSuppression: false, 
-                        autoGainControl: false 
-                    } 
-                });
-                
-                const source = audioCtx.createMediaStreamSource(stream);
-                analyser = audioCtx.createAnalyser();
-                analyser.fftSize = 512;
-                source.connect(analyser);
-                dataArray = new Uint8Array(analyser.frequencyBinCount);
-                
-                log("Microphone Active (" + audioCtx.sampleRate + "Hz)");
-            } catch (err) {
-                log("Mic Error: " + err.message);
-            }
-        }
-
-        // --- UTILITIES ---
-
-        function log(msg) {
-            console.log(msg);
-            const el = document.getElementById('error-log');
-            el.innerHTML = msg; // Overwrite to keep clean
-            // Flash red if error
-            if(msg.includes("Error") || msg.includes("missing")) el.style.color = "red";
-            else el.style.color = "#0f0";
-        }
-
-        // Expose Mode Switcher to HTML
-        window.setMode = function(newMode) {
-            mode = newMode;
-            // UI Toggle
-            document.querySelectorAll('#controls button').forEach(b => b.classList.remove('active'));
-            document.getElementById('btn-' + newMode.toLowerCase()).classList.add('active');
-            document.getElementById('mode-status').innerText = newMode;
-        };
-
-        function getAudioAnalysis() {
-            if (!analyser) return { bass: 0, treble: 0, avg: 0 };
-            
-            analyser.getByteFrequencyData(dataArray);
-            const binCount = dataArray.length;
-            
-            // Bass: Lower 10% of bins
-            let bassSum = 0;
-            for(let i=0; i<Math.floor(binCount * 0.1); i++) bassSum += dataArray[i];
-            
-            // Treble: Upper 50% of bins
-            let trebleSum = 0;
-            for(let i=Math.floor(binCount * 0.5); i<binCount; i++) trebleSum += dataArray[i];
-
-            return {
-                bass: (bassSum / (binCount * 0.1)) / 255, // Normalized 0-1
-                treble: (trebleSum / (binCount * 0.5)) / 255, // Normalized 0-1
-                avg: (bassSum + trebleSum) / binCount // Very rough avg
-            };
-        }
-
-        // --- RENDER LOOP ---
-
+        // --- 4. RENDER LOOP ---
         function render(timestamp, frame) {
-            let color = new THREE.Color(0x00ff00); // Default Green
-            let paintNow = false;
-            let displayVal = "";
+            let color = new THREE.Color(0x00ff00);
+            let paint = false;
+            let display = "--";
 
-            // 1. Process Data based on Mode
             if (mode === 'EMF') {
-                displayVal = currentMag.toFixed(1) + " μT";
-                
-                // Visualization Logic: 
-                // Earth ~40uT (Green). Strong >100uT (Red).
-                // Normalize 40-150 range
-                let t = Math.max(0, Math.min(1, (currentMag - 40) / 110));
-                color.setHSL(0.33 * (1 - t), 1, 0.5); // 0.33 is Green, 0 is Red
-                
-                // Only paint if value is valid
-                if (currentMag > 0) paintNow = true;
-            } 
-            else if (mode === 'LIGHT') {
-                displayVal = currentLux.toFixed(0) + " Lux";
-                
-                // Visualization Logic:
-                // Dark (Black) -> Bright (Yellow)
-                let t = Math.min(1, currentLux / 800);
-                color.setHSL(0.15, 1, t * 0.6 + 0.1); // Yellow hue, lightness scales
-                
-                paintNow = true;
-            }
-            else if (mode === 'AUDIO') {
-                const audio = getAudioAnalysis();
-                displayVal = "Bass:" + audio.bass.toFixed(2) + " Treb:" + audio.treble.toFixed(2);
-                
-                // Visualization Logic:
-                // High Treble = Blue/Cyan. High Bass = Red/Orange.
-                if (audio.treble > audio.bass && audio.treble > 0.2) {
-                    color.setRGB(0, 1 - audio.treble, 1); // Cyan/Blue
-                } else {
-                    color.setRGB(1, 1 - audio.bass, 0); // Red/Yellow
+                display = currentMag.toFixed(1) + " μT";
+                if(currentMag > 0) {
+                    let t = Math.max(0, Math.min(1, (currentMag - 30) / 100));
+                    color.setHSL(0.33 * (1-t), 1, 0.5);
+                    paint = true;
                 }
-                
-                // Only paint if there is actual sound
-                if (audio.bass > 0.1 || audio.treble > 0.1) paintNow = true;
+            } else if (mode === 'AUDIO') {
+                if(analyser) {
+                    analyser.getByteFrequencyData(dataArray);
+                    let avg = dataArray.reduce((a,b)=>a+b,0) / dataArray.length;
+                    display = avg.toFixed(1) + " Vol";
+                    if(avg > 10) {
+                        color.setHSL(0.6 - (Math.min(1, avg/100)*0.6), 1, 0.5);
+                        paint = true;
+                    }
+                }
+            } else if (mode === 'LIGHT') {
+                display = currentLux + " Lux";
+                color.setHSL(0.15, 1, Math.min(1, currentLux/800));
+                paint = true;
             }
 
-            // Update HUD
-            document.getElementById('val-status').innerText = displayVal;
-            document.getElementById('sys-status').innerText = frame ? "TRACKING" : "WAITING AR";
+            document.getElementById('val-status').innerText = display;
+            document.getElementById('mode-status').innerText = mode;
 
-            // 2. Painting Logic (Throttled to every 100ms)
-            if (frame && paintNow && (timestamp - lastPaintTime > 100)) {
+            if (frame && paint && (timestamp - lastPaintTime > 100)) {
                 paintAir(color);
                 lastPaintTime = timestamp;
             }
-
             renderer.render(scene, camera);
         }
 
         function paintAir(color) {
-            // Create a small sphere
-            const geometry = new THREE.SphereGeometry(0.04, 16, 16); // 4cm ball
-            const material = new THREE.MeshPhongMaterial({ 
-                color: color, 
-                shininess: 100 
-            });
-            const ball = new THREE.Mesh(geometry, material);
-
-            // Position it relative to the camera (The "Tricorder" effect)
-            // We place it 40cm in front of the phone's *current* position
+            const geo = new THREE.SphereGeometry(0.04, 8, 8);
+            const mat = new THREE.MeshBasicMaterial({ color: color });
+            const mesh = new THREE.Mesh(geo, mat);
+            
             const p = camera.position;
             const d = camera.getWorldDirection(new THREE.Vector3());
-            
-            // Vector Math: NewPos = CameraPos + (Direction * Distance)
-            ball.position.set(
-                p.x + d.x * 0.4,
-                p.y + d.y * 0.4,
-                p.z + d.z * 0.4
-            );
+            mesh.position.set(p.x + d.x*0.4, p.y + d.y*0.4, p.z + d.z*0.4);
+            scene.add(mesh);
+        }
 
-            scene.add(ball);
+        window.setMode = function(m) {
+            mode = m;
+            document.querySelectorAll('#controls button').forEach(b => b.classList.remove('active'));
+            document.getElementById('btn-' + m.toLowerCase()).classList.add('active');
+        };
+
+        function log(msg) {
+            document.getElementById('error-log').innerText = msg;
+            console.log(msg);
         }
     </script>
 </body>
